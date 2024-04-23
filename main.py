@@ -5,15 +5,16 @@ from typing import List
 import copy
 import random
 import pygame.gfxdraw
+from abc import ABC, abstractmethod
 
 class CellDirection(Enum):
     UPWARDS = -1
     DOWNWARDS = 1
 
-@dataclass    
-class Rule:
-    birth: set
-    survival: set
+class Rule(ABC):
+    @abstractmethod
+    def get_new_state(self, automaton, cell) -> bool:
+        pass
 
 def line_equation(x: float, point1: pygame.Vector2, point2: pygame.Vector2):
         return (x - point1.x) * (point2.y - point1.y) / (point2.x - point1.x) + point1.y
@@ -85,21 +86,11 @@ class Automaton:
                 row.append(cell)
             self.cells.append(row)
     
-    def count_alive_neighbors(self, cell: Cell):
-        count = 0
-        for i, j in cell.neighbors:
-            count += self.cells[i][j].is_alive
-        return count
-    
     def step(self):
         new_cells = [[copy.copy(cell) for cell in row] for row in self.cells]
         for i in range(len(self.cells)):
             for j in range(len(self.cells[0])):
-                alive_count = self.count_alive_neighbors(self.cells[i][j])
-                if not self.cells[i][j].is_alive and alive_count in self.rule.birth or self.cells[i][j].is_alive and alive_count in self.rule.survival:
-                    new_cells[i][j].is_alive = True
-                    continue
-                new_cells[i][j].is_alive = False
+                new_cells[i][j].is_alive = self.rule.get_new_state(self, self.cells[i][j])
         self.cells = new_cells
         self.turn += 1
     
@@ -115,8 +106,40 @@ class Automaton:
                 if cell.collidepoint(pos):
                     return cell
         return None
-        
 
+def int_to_bool_list(num: int, length: int):
+    ret = [bool(int(x)) for x in list('{0:0b}'.format(num))]
+    return [False] * (length - len(ret)) + ret
+
+def bool_list_to_int(lst):
+    return int('0b' + ''.join(['1' if x else '0' for x in lst]), base=2)
+        
+class WolframRule(Rule):
+    def __init__(self, rule_num: int):
+        self.rule_num = rule_num
+    
+    def get_new_state(self, automaton: Automaton, cell: Cell) -> bool:
+        return int_to_bool_list(self.rule_num, 2**len(cell.neighbors))[-bool_list_to_int([automaton.cells[i][j].is_alive for i, j in cell.neighbors])]
+    
+    def __str__(self) -> str:
+        return str(self.rule_num)
+
+class LifelikeRule(Rule):
+    def __init__(self, birth: set, survival: set) -> None:
+        self.birth = birth
+        self.survival = survival
+    
+    def get_new_state(self, automaton: Automaton, cell: Cell) -> bool:
+        alive_count = 0
+        for i, j in cell.neighbors:
+            alive_count += automaton.cells[i][j].is_alive
+            
+        if not cell.is_alive and alive_count in self.birth or cell.is_alive and alive_count in self.survival:
+            return True
+        return False
+        
+    def __str__(self):
+        return f"B{''.join(str(num) for num in self.birth)}/S{''.join(str(num) for num in self.survival)}"
 
 def main_loop(automaton: Automaton, screen: pygame.surface.Surface, sim_step_time: float):
     global paused
@@ -130,6 +153,7 @@ def main_loop(automaton: Automaton, screen: pygame.surface.Surface, sim_step_tim
     font = pygame.font.SysFont("monospace", 30, True)
     text = [font.render('Paused', True, 'black'),
             font.render('t = 0', True, 'black'),
+            font.render(f'Rule: {automaton.rule}', True, 'black'),
             font.render('R - restart', True, 'black'), 
             font.render('SPACE - pause/resume', True, 'black'), 
             font.render('ENTER - next turn', True, 'black'),
@@ -181,18 +205,10 @@ def main_loop(automaton: Automaton, screen: pygame.surface.Surface, sim_step_tim
         dt = clock.tick(60)
         
 
-
-def int_to_bool_list(num: int, length: int):
-    ret = [bool(int(x)) for x in list('{0:0b}'.format(num))]
-    return [False] * (length - len(ret)) + ret
-
 def apply_init_state(automaton: Automaton, init_state: list):
     for i in range(automaton.cell_count_x):
         for j in range(automaton.cell_count_y):
             automaton.cells[i][j].is_alive = init_state[i + j * automaton.cell_count_x]
-            
-def bool_list_to_int(lst):
-    return int('0b' + ''.join(['1' if x else '0' for x in lst]), base=2)
 
 def gen_random_state(filling_range_halved: tuple, filling_center: tuple, whole_range: tuple):
     init_state = [False] * (whole_range[0] * whole_range[1])
@@ -225,11 +241,13 @@ def main():
         CELL_COUNT_X = 100
         CELL_COUNT_Y = 60
         PADDING = 3
-        # rule = Rule(birth={1}, survival={2})
-        rule=Rule(  {random.randint(0, 3) for _ in range(random.randint(0, 3))}, 
-                    {random.randint(0, 3) for _ in range(random.randint(0, 3))})
+        # rule = LifelikeRule(birth={1}, survival={2})
+        # rule=LifelikeRule(  {random.randint(0, 3) for _ in range(random.randint(0, 3))}, 
+        #                     {random.randint(0, 3) for _ in range(random.randint(0, 3))})
+        rule=WolframRule(random.randint(0, 2**(2**3)))
+        # rule = WolframRule(255)
         init_state = gen_random_state(  filling_center=(int(CELL_COUNT_X/ 2), int(CELL_COUNT_Y / 2)), 
-                                        filling_range_halved=(5, 5),
+                                        filling_range_halved=(int(CELL_COUNT_X / 2), int(CELL_COUNT_Y / 2)),
                                         whole_range=(CELL_COUNT_X, CELL_COUNT_Y)
                                         )
         # init_state = int_to_bool_list(0, CELL_COUNT_X * CELL_COUNT_Y)
@@ -253,8 +271,7 @@ def main():
         apply_init_state(automaton, init_state)
         print( "cell_count_x:", automaton.cell_count_x, 
                 "cell_count_y:", automaton.cell_count_y,
-                "rule.birth:", automaton.rule.birth,
-                "rule.survival:", automaton.rule.survival)
+                "rule:", automaton.rule)
         print(  "init_state:", bool_list_to_int(init_state))
         main_loop(automaton, screen, SIM_STEP_TIME)
         if not restarting:
