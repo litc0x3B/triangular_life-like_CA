@@ -2,10 +2,12 @@ import pygame
 from enum import Enum
 from dataclasses import dataclass
 from typing import List
+from typing import Tuple
 import copy
 import random
 import pygame.gfxdraw
 from abc import ABC, abstractmethod
+import json
 
 class CellDirection(Enum):
     UPWARDS = -1
@@ -50,10 +52,15 @@ class Cell:
     
     def __str__(self):
         return str(int(self.is_alive))
+    
+    def __eq__(self, other):
+        return self.is_alive == other.is_alive
 
 class Automaton:
     def __init__(   self,
-                    rule: Rule,
+                    j = None,
+                    neighborhood: List[Tuple[int]] = None,
+                    rule: Rule  = None,
                     cell_count_x = 50,
                     cell_count_y = 50,
                     offset_x = 0,
@@ -63,11 +70,16 @@ class Automaton:
                     cell_padding_left = 3,
                     cell_padding_top = 3):
         
+        if j is not None:
+            self.__dict__ = json.loads(j)
+            return
+        
         if cell_count_x % 2 != 0:
             raise ValueError('cell_count_x should be even')
         if cell_count_y % 2 != 0:
             raise ValueError('cell_count_y should be even')
         
+        self.neighborhood = neighborhood
         self.turn = 0
         self.rule = rule
         self.cells: List[List[Cell]] = []
@@ -75,34 +87,42 @@ class Automaton:
         self.cell_count_y = cell_count_y
         
         for i in range(cell_count_x):
-            row = []
+            col = []
             for j in range(cell_count_y):
                 dir = CellDirection.UPWARDS if (i + j) % 2 == 0 else CellDirection.DOWNWARDS
-                neighbors = [((i - 1) % cell_count_x, j), ((i + 1) % cell_count_x, j), (i, (j + (-dir.value)) % cell_count_y) ]
+                neighbors = [((i + neighbor[0]) % cell_count_x, (j + (-dir.value) * neighbor[1]) % cell_count_y) for neighbor in self.neighborhood]
                 cell = Cell(pygame.Vector2(i * (cell_width / 2 + cell_padding_left) + offset_x, j * (cell_height + cell_padding_top) + offset_y), 
                             neighbors,
                             dir,
                             pygame.Vector2(cell_width, cell_height))
-                row.append(cell)
-            self.cells.append(row)
+                col.append(cell)
+            self.cells.append(col)
+
+    def toJSON(self):
+        return json.dumps(
+            self,
+            default=lambda o: o.__dict__, 
+            sort_keys=True,
+            indent=4)
     
     def step(self):
-        new_cells = [[copy.copy(cell) for cell in row] for row in self.cells]
+        new_cells = [[copy.copy(cell) for cell in col] for col in self.cells]
         for i in range(len(self.cells)):
             for j in range(len(self.cells[0])):
                 new_cells[i][j].is_alive = self.rule.get_new_state(self, self.cells[i][j])
+        
         self.cells = new_cells
         self.turn += 1
     
     def draw(self, surface):
-        for row in self.cells:
-            for cell in row:
+        for col in self.cells:
+            for cell in col:
                 cell.draw(surface)
                 
     
     def get_cell_by_coord(self, pos: pygame.Vector2):
-        for row in self.cells:
-            for cell in row:
+        for col in self.cells:
+            for cell in col:
                 if cell.collidepoint(pos):
                     return cell
         return None
@@ -146,6 +166,7 @@ def main_loop(automaton: Automaton, screen: pygame.surface.Surface, sim_step_tim
     global running
     global restarting
     global show_text
+    global search_mode
     dt = 0
     clock = pygame.time.Clock()
     sim_step_timer = sim_step_time
@@ -160,7 +181,7 @@ def main_loop(automaton: Automaton, screen: pygame.surface.Surface, sim_step_tim
             font.render('H - show/hide this text', True, 'black')]
     text_pos = (20, 20)
     
-    while running:
+    while running and not restarting:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
@@ -175,22 +196,36 @@ def main_loop(automaton: Automaton, screen: pygame.surface.Surface, sim_step_tim
                         cell.is_alive = not cell.is_alive
                 if event.type == pygame.KEYUP and event.key == pygame.K_r:
                     restarting = True
-                    running = False
                 if event.type == pygame.KEYUP and event.key == pygame.K_h:
                     show_text = not show_text
+                if event.type == pygame.KEYUP and event.key == pygame.K_s:
+                    search_mode = not search_mode
         
         
         sim_step_timer -= dt / 1000
-        if sim_step_timer <= 0:
+        if sim_step_timer <= 0 or search_mode:
             if not paused:
+                old_cells = automaton.cells
                 automaton.step()
+                if search_mode and old_cells == automaton.cells:
+                    restarting = True
+                    
             sim_step_timer = sim_step_time
         
         screen.fill((30, 30, 30))
         automaton.draw(screen)
-        
+        # automaton.cells[10][10].draw(screen)
+        # for i, j in automaton.cells[10][10].neighbors:
+        #     automaton.cells[i][j].draw(screen)
+
         if show_text:
-            text[0] = font.render("Paused" if paused else "Simulating", True, 'Black')
+            if paused:
+                text[0] = font.render("Paused", True, 'Black')
+            elif search_mode:
+                text[0] = font.render("Searching", True, 'Black')
+            else:
+                text[0] = font.render("Simulating", True, 'Black')
+
             text[1] = font.render(f't = {automaton.turn}', True, 'Black')
             
             pygame.gfxdraw.box(screen, 
@@ -202,25 +237,35 @@ def main_loop(automaton: Automaton, screen: pygame.surface.Surface, sim_step_tim
         
         pygame.display.flip()
 
-        dt = clock.tick(60)
-        
+        if search_mode:
+            dt = clock.tick()
+            
+        else:
+            dt = clock.tick(60)        
 
 def apply_init_state(automaton: Automaton, init_state: list):
     for i in range(automaton.cell_count_x):
         for j in range(automaton.cell_count_y):
             automaton.cells[i][j].is_alive = init_state[i + j * automaton.cell_count_x]
 
-def gen_random_state(filling_range_halved: tuple, filling_center: tuple, whole_range: tuple):
-    init_state = [False] * (whole_range[0] * whole_range[1])
+def gen_random_state(filling_range_halved: tuple, filling_center: tuple, whole_range: tuple, init_state: list | None = None):
+    if init_state is None:
+        init_state = [False] * (whole_range[0] * whole_range[1])
     for i in range(filling_center[0] - filling_range_halved[0], filling_center[0] + filling_range_halved[0]):
         for j in range(filling_center[1] - filling_range_halved[1], filling_center[1] + filling_range_halved[1]):
             init_state[i + j * whole_range[0]] = bool(random.randint(0, 1))
     return init_state
 
 running = True
-paused = True
+paused = False
 restarting = False
 show_text = True
+search_mode = False
+SEARCH_TIME = 150
+SIM_STEP_TIME = 0.1
+CELL_COUNT_X = 20
+CELL_COUNT_Y = 20
+PADDING = 3
 
 
 
@@ -237,27 +282,26 @@ def main():
         running = True
         
         ############################## parameters (maybe you want to change these) #####################
-        SIM_STEP_TIME = 0.05
-        CELL_COUNT_X = 100
-        CELL_COUNT_Y = 60
-        PADDING = 3
-        # rule = LifelikeRule(birth={1}, survival={2})
-        # rule=LifelikeRule(  {random.randint(0, 3) for _ in range(random.randint(0, 3))}, 
-        #                     {random.randint(0, 3) for _ in range(random.randint(0, 3))})
-        rule=WolframRule(random.randint(0, 2**(2**3)))
+        rule = LifelikeRule(birth={4, 5, 6}, survival={4, 5})
+        # rule=LifelikeRule(  {random.randint(3, 5) for _ in range(random.randint(0, 12))}, 
+        #                     {random.randint(0, 3) for _ in range(random.randint(0, 12))})
+        # rule=WolframRule(random.randint(0, 2**(2**4)))
         # rule = WolframRule(255)
-        init_state = gen_random_state(  filling_center=(int(CELL_COUNT_X/ 2), int(CELL_COUNT_Y / 2)), 
-                                        filling_range_halved=(int(CELL_COUNT_X / 2), int(CELL_COUNT_Y / 2)),
+        init_state = gen_random_state(  filling_center=(int(CELL_COUNT_X / 2), int(CELL_COUNT_Y / 2)), 
+                                        filling_range_halved=(4, 4),
                                         whole_range=(CELL_COUNT_X, CELL_COUNT_Y)
                                         )
         # init_state = int_to_bool_list(0, CELL_COUNT_X * CELL_COUNT_Y)
+        # init_state[len(init_state)] = True
         ##################################################################################################
         
         CELL_WIDTH = 2 * (screen.get_width()) / CELL_COUNT_X - PADDING * 2
         CELL_HEIGHT = (screen.get_height()) / CELL_COUNT_Y - PADDING
         
         automaton = Automaton( 
-                                rule=rule, 
+                                rule=rule,
+                                # neighborhood=[(-1, 0), (0, 1), (1, 0)],
+                                neighborhood=[(i, 1) for i in range(-2, 3)] + [(-2, 0), (-1, 0), (1, 0), (2, 0), (-1, -1), (0, -1), (1, -1)],
                                 cell_count_x=CELL_COUNT_X, 
                                 cell_count_y=CELL_COUNT_Y, 
                                 cell_width=CELL_WIDTH, 
@@ -267,12 +311,13 @@ def main():
                                 cell_padding_left=PADDING,
                                 cell_padding_top=PADDING          
                             )  
-        
         apply_init_state(automaton, init_state)
         print( "cell_count_x:", automaton.cell_count_x, 
                 "cell_count_y:", automaton.cell_count_y,
                 "rule:", automaton.rule)
         print(  "init_state:", bool_list_to_int(init_state))
+    
+
         main_loop(automaton, screen, SIM_STEP_TIME)
         if not restarting:
             break
