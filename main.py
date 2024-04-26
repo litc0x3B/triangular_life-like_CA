@@ -8,6 +8,8 @@ import random
 import pygame.gfxdraw
 from abc import ABC, abstractmethod
 import json
+import uuid
+import matplotlib.pyplot as plt
 
 class CellDirection(Enum):
     UPWARDS = -1
@@ -32,7 +34,7 @@ class Cell:
                         pygame.Vector2(self.pos.x - self.size.x / 2, self.pos.y - self.dir.value * self.size.y / 2),
                         pygame.Vector2(self.pos.x, self.pos.y + self.dir.value * self.size.y / 2)]
         
-    def draw(self, surface): 
+    def  draw(self, surface): 
         pygame.gfxdraw.filled_trigon(surface, 
                                     int(self.points[0].x), int(self.points[0].y), 
                                     int(self.points[1].x), int(self.points[1].y),  
@@ -54,13 +56,14 @@ class Cell:
         return str(int(self.is_alive))
     
     def __eq__(self, other):
-        return self.is_alive == other.is_alive
+        if type(other) is Cell:
+            return self.is_alive == other.is_alive
+        return self.is_alive == other
 
 class Automaton:
     def __init__(   self,
-                    j = None,
-                    neighborhood: List[Tuple[int]] = None,
-                    rule: Rule  = None,
+                    neighborhood: List[Tuple[int]],
+                    rule: Rule,
                     cell_count_x = 50,
                     cell_count_y = 50,
                     offset_x = 0,
@@ -70,9 +73,6 @@ class Automaton:
                     cell_padding_left = 3,
                     cell_padding_top = 3):
         
-        if j is not None:
-            self.__dict__ = json.loads(j)
-            return
         
         if cell_count_x % 2 != 0:
             raise ValueError('cell_count_x should be even')
@@ -107,12 +107,15 @@ class Automaton:
     
     def step(self):
         new_cells = [[copy.copy(cell) for cell in col] for col in self.cells]
+        alive_count = 0
         for i in range(len(self.cells)):
             for j in range(len(self.cells[0])):
                 new_cells[i][j].is_alive = self.rule.get_new_state(self, self.cells[i][j])
+                alive_count += new_cells[i][j].is_alive
         
         self.cells = new_cells
         self.turn += 1
+        return alive_count
     
     def draw(self, surface):
         for col in self.cells:
@@ -167,18 +170,21 @@ def main_loop(automaton: Automaton, screen: pygame.surface.Surface, sim_step_tim
     global restarting
     global show_text
     global search_mode
+    population = []
     dt = 0
     clock = pygame.time.Clock()
     sim_step_timer = sim_step_time
     
     font = pygame.font.SysFont("monospace", 30, True)
-    text = [font.render('Paused', True, 'black'),
+    text = [
+            font.render('Paused', True, 'black'),
             font.render('t = 0', True, 'black'),
             font.render(f'Rule: {automaton.rule}', True, 'black'),
-            font.render('R - restart', True, 'black'), 
-            font.render('SPACE - pause/resume', True, 'black'), 
-            font.render('ENTER - next turn', True, 'black'),
-            font.render('H - show/hide this text', True, 'black')]
+            # font.render('R - restart', True, 'black'), 
+            # font.render('SPACE - pause/resume', True, 'black'), 
+            # font.render('ENTER - next turn', True, 'black'),
+            # font.render('H - show/hide this text', True, 'black')
+            ]
     text_pos = (20, 20)
     
     while running and not restarting:
@@ -189,7 +195,7 @@ def main_loop(automaton: Automaton, screen: pygame.surface.Surface, sim_step_tim
                 if event.type == pygame.KEYUP and event.key == pygame.K_SPACE:
                     paused = not paused 
                 if event.type == pygame.KEYUP and event.key == pygame.K_RETURN:
-                    automaton.step()
+                    population.append(automaton.step())
                 if event.type == pygame.MOUSEBUTTONUP:
                     cell = automaton.get_cell_by_coord(pygame.Vector2(pygame.mouse.get_pos()))
                     if cell:
@@ -198,15 +204,19 @@ def main_loop(automaton: Automaton, screen: pygame.surface.Surface, sim_step_tim
                     restarting = True
                 if event.type == pygame.KEYUP and event.key == pygame.K_h:
                     show_text = not show_text
-                if event.type == pygame.KEYUP and event.key == pygame.K_s:
+                if event.type == pygame.KEYUP and event.key == pygame.K_f:
                     search_mode = not search_mode
+                if event.type == pygame.KEYUP and event.key == pygame.K_s:
+                    pygame.image.save(screen, str(uuid.uuid4()) + '.jpg')
+                
         
         
         sim_step_timer -= dt / 1000
         if sim_step_timer <= 0 or search_mode:
             if not paused:
+                # pygame.image.save(screen, str(uuid.uuid4()) + '.jpg')
                 old_cells = automaton.cells
-                automaton.step()
+                population.append(automaton.step())
                 if search_mode and old_cells == automaton.cells:
                     restarting = True
                     
@@ -234,14 +244,15 @@ def main_loop(automaton: Automaton, screen: pygame.surface.Surface, sim_step_tim
             for i in range(len(text)):
                 screen.blit(text[i], (text_pos[0], text_pos[1] + i * text[0].get_height()))
         
-        
         pygame.display.flip()
 
         if search_mode:
             dt = clock.tick()
             
         else:
-            dt = clock.tick(60)        
+            dt = clock.tick(60) 
+    
+    return population       
 
 def apply_init_state(automaton: Automaton, init_state: list):
     for i in range(automaton.cell_count_x):
@@ -257,16 +268,21 @@ def gen_random_state(filling_range_halved: tuple, filling_center: tuple, whole_r
     return init_state
 
 running = True
-paused = False
+paused = True
 restarting = False
 show_text = True
 search_mode = False
 SEARCH_TIME = 150
-SIM_STEP_TIME = 0.1
-CELL_COUNT_X = 20
-CELL_COUNT_Y = 20
+SIM_STEP_TIME = 0.2
+CELL_COUNT_X = 100
+CELL_COUNT_Y = 100
 PADDING = 3
 
+def lifelike_ETA_notation(num: int, neighborhood_size: int):
+    num_bool_list = int_to_bool_list(num, (neighborhood_size + 1) * 2)
+    s = {neighborhood_size - i for i in range(int(len(num_bool_list) / 2)) if num_bool_list[i] == True}
+    b = {neighborhood_size - i for i in range(int(len(num_bool_list) / 2)) if num_bool_list[i + neighborhood_size + 1] == True}
+    return LifelikeRule(birth=b, survival=s)
 
 
 def main():
@@ -275,33 +291,40 @@ def main():
     global restarting
     
     pygame.init()
-    screen = pygame.display.set_mode((1280, 720))
+    screen = pygame.display.set_mode((900, 900))
     
     
     while True:
         running = True
         
         ############################## parameters (maybe you want to change these) #####################
-        rule = LifelikeRule(birth={4, 5, 6}, survival={4, 5})
-        # rule=LifelikeRule(  {random.randint(3, 5) for _ in range(random.randint(0, 12))}, 
-        #                     {random.randint(0, 3) for _ in range(random.randint(0, 12))})
+        rule = LifelikeRule(birth={0, 1}, survival={0, 2})
+        
+        # rule=LifelikeRule(  {random.randint(0, 3) for _ in range(random.randint(0, 3))}, 
+        #                     {random.randint(0, 3) for _ in range(random.randint(0, 3))})
         # rule=WolframRule(random.randint(0, 2**(2**4)))
         # rule = WolframRule(255)
-        init_state = gen_random_state(  filling_center=(int(CELL_COUNT_X / 2), int(CELL_COUNT_Y / 2)), 
-                                        filling_range_halved=(4, 4),
-                                        whole_range=(CELL_COUNT_X, CELL_COUNT_Y)
-                                        )
+        
+        # rule = lifelike_ETA_notation(random.randint(0, 255), 3)
+        # rule.birth.add(0)
+        # if 3 in rule.survival:
+        #     rule.survival.remove(3)
+        
+        # init_state = gen_random_state(  filling_center=(int(CELL_COUNT_X / 2), int(CELL_COUNT_Y / 2)), 
+        #                                 filling_range_halved=(2, 2),
+        #                                 whole_range=(CELL_COUNT_X, CELL_COUNT_Y)
+        #                                 )
         # init_state = int_to_bool_list(0, CELL_COUNT_X * CELL_COUNT_Y)
-        # init_state[len(init_state)] = True
+        # init_state[int(len(init_state) / 2)] = True
         ##################################################################################################
         
         CELL_WIDTH = 2 * (screen.get_width()) / CELL_COUNT_X - PADDING * 2
         CELL_HEIGHT = (screen.get_height()) / CELL_COUNT_Y - PADDING
-        
+                
         automaton = Automaton( 
                                 rule=rule,
-                                # neighborhood=[(-1, 0), (0, 1), (1, 0)],
-                                neighborhood=[(i, 1) for i in range(-2, 3)] + [(-2, 0), (-1, 0), (1, 0), (2, 0), (-1, -1), (0, -1), (1, -1)],
+                                neighborhood=[(-1, 0), (0, 1), (1, 0)],
+                                # neighborhood=[(i, 1) for i in range(-2, 3)] + [(-2, 0), (-1, 0), (1, 0), (2, 0), (-1, -1), (0, -1), (1, -1)],
                                 cell_count_x=CELL_COUNT_X, 
                                 cell_count_y=CELL_COUNT_Y, 
                                 cell_width=CELL_WIDTH, 
@@ -311,14 +334,30 @@ def main():
                                 cell_padding_left=PADDING,
                                 cell_padding_top=PADDING          
                             )  
-        apply_init_state(automaton, init_state)
-        print( "cell_count_x:", automaton.cell_count_x, 
-                "cell_count_y:", automaton.cell_count_y,
-                "rule:", automaton.rule)
-        print(  "init_state:", bool_list_to_int(init_state))
+        
+        for i in range(int(CELL_COUNT_X / 2), CELL_COUNT_X):
+            for j in range(CELL_COUNT_Y):
+                automaton.cells[i][j].is_alive = True
+        
+        for i in range(3):
+            automaton.step()
+            
+        for i in range(CELL_COUNT_Y):
+            automaton.cells[int(CELL_COUNT_X / 2)][i].is_alive = True
+        
+        # apply_init_state(automaton, init_state)
+        # print( "cell_count_x:", automaton.cell_count_x, 
+        #         "cell_count_y:", automaton.cell_count_y,
+        #         "rule:", automaton.rule)
+        # print(  "init_state:", bool_list_to_int(init_state))
     
 
-        main_loop(automaton, screen, SIM_STEP_TIME)
+        population = main_loop(automaton, screen, SIM_STEP_TIME)
+        
+        # fig, ax = plt.subplots()
+        # ax.plot(range(0, len(population)), population)
+        # plt.show()
+        
         if not restarting:
             break
         restarting = False
