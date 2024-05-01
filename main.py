@@ -24,7 +24,11 @@ def line_equation(x: float, point1: pygame.Vector2, point2: pygame.Vector2):
         return (x - point1.x) * (point2.y - point1.y) / (point2.x - point1.x) + point1.y
 
 class Cell:
-    def __init__(self, pos: pygame.Vector2, neighbors: list, dir: CellDirection = CellDirection.UPWARDS, size : pygame.Vector2 = pygame.Vector2(10, 10)):
+    def __init__(self,
+                 pos: pygame.Vector2,
+                neighbors: list,
+                 dir: CellDirection = CellDirection.UPWARDS,
+                 size : pygame.Vector2 = pygame.Vector2(10, 10)):
         self.pos = pos
         self.is_alive = False
         self.dir = dir
@@ -74,10 +78,10 @@ class Automaton:
                     cell_padding_top = 3):
         
         
-        if cell_count_x % 2 != 0:
-            raise ValueError('cell_count_x should be even')
-        if cell_count_y % 2 != 0:
-            raise ValueError('cell_count_y should be even')
+        # if cell_count_x % 2 != 0:
+        #     raise ValueError('cell_count_x should be even')
+        # if cell_count_y % 2 != 0:
+        #     raise ValueError('cell_count_y should be even')
         
         self.neighborhood = neighborhood
         self.turn = 0
@@ -85,13 +89,15 @@ class Automaton:
         self.cells: List[List[Cell]] = []
         self.cell_count_x = cell_count_x
         self.cell_count_y = cell_count_y
+        self.alive_count = 0
         
         for i in range(cell_count_x):
             col = []
             for j in range(cell_count_y):
                 dir = CellDirection.UPWARDS if (i + j) % 2 == 0 else CellDirection.DOWNWARDS
                 neighbors = [((i + neighbor[0]) % cell_count_x, (j + (-dir.value) * neighbor[1]) % cell_count_y) for neighbor in self.neighborhood]
-                cell = Cell(pygame.Vector2(i * (cell_width / 2 + cell_padding_left) + offset_x, j * (cell_height + cell_padding_top) + offset_y), 
+                cell = Cell(pygame.Vector2(i * (cell_width / 2 + cell_padding_left) + offset_x,
+                                           j * (cell_height + cell_padding_top) + offset_y), 
                             neighbors,
                             dir,
                             pygame.Vector2(cell_width, cell_height))
@@ -105,17 +111,24 @@ class Automaton:
             sort_keys=True,
             indent=4)
     
+    def gen_neighbors(self, cell: Cell):
+        return (self.cells[i][j] for i, j in cell.neighbors)
+
+    def shallow_copy_with_cells(self):
+       automaton = copy.copy(self) 
+       automaton.cells = [[copy.copy(cell) for cell in col] for col in self.cells]
+       return automaton
+
     def step(self):
-        new_cells = [[copy.copy(cell) for cell in col] for col in self.cells]
-        alive_count = 0
+        automaton = self.shallow_copy_with_cells()
+        automaton.alive_count = 0
         for i in range(len(self.cells)):
             for j in range(len(self.cells[0])):
-                new_cells[i][j].is_alive = self.rule.get_new_state(self, self.cells[i][j])
-                alive_count += new_cells[i][j].is_alive
+                automaton.cells[i][j].is_alive = self.rule.get_new_state(self, self.cells[i][j])
+                automaton.alive_count += automaton.cells[i][j].is_alive
         
-        self.cells = new_cells
-        self.turn += 1
-        return alive_count
+        automaton.turn += 1
+        return automaton
     
     def draw(self, surface):
         for col in self.cells:
@@ -164,6 +177,13 @@ class LifelikeRule(Rule):
     def __str__(self):
         return f"B{''.join(str(num) for num in self.birth)}/S{''.join(str(num) for num in self.survival)}"
 
+def step(automatons: List[Automaton], screen: pygame.Surface, population: list):
+    pygame.image.save(screen, str(automatons[len(automatons) - 1].turn) + '.jpg')
+    automatons.append(automatons[len(automatons) - 1].step())
+    population.append(automatons[len(automatons) - 1])
+
+
+
 def main_loop(automaton: Automaton, screen: pygame.surface.Surface, sim_step_time: float):
     global paused
     global running
@@ -174,6 +194,7 @@ def main_loop(automaton: Automaton, screen: pygame.surface.Surface, sim_step_tim
     dt = 0
     clock = pygame.time.Clock()
     sim_step_timer = sim_step_time
+    automatons = [automaton]
     
     font = pygame.font.SysFont("monospace", 30, True)
     text = [
@@ -194,10 +215,10 @@ def main_loop(automaton: Automaton, screen: pygame.surface.Surface, sim_step_tim
             if pygame.key.get_focused():
                 if event.type == pygame.KEYUP and event.key == pygame.K_SPACE:
                     paused = not paused 
-                if event.type == pygame.KEYUP and event.key == pygame.K_RETURN:
-                    population.append(automaton.step())
+                if event.type == pygame.KEYUP and event.key == pygame.K_RIGHT:
+                    step(automatons=automatons, screen=screen, population=population)
                 if event.type == pygame.MOUSEBUTTONUP:
-                    cell = automaton.get_cell_by_coord(pygame.Vector2(pygame.mouse.get_pos()))
+                    cell = automatons[len(automatons) - 1].get_cell_by_coord(pygame.Vector2(pygame.mouse.get_pos()))
                     if cell:
                         cell.is_alive = not cell.is_alive
                 if event.type == pygame.KEYUP and event.key == pygame.K_r:
@@ -208,25 +229,28 @@ def main_loop(automaton: Automaton, screen: pygame.surface.Surface, sim_step_tim
                     search_mode = not search_mode
                 if event.type == pygame.KEYUP and event.key == pygame.K_s:
                     pygame.image.save(screen, str(uuid.uuid4()) + '.jpg')
+                if event.type == pygame.KEYUP and event.key == pygame.K_LEFT:
+                    if len(automatons) > 1:
+                        automatons.pop()
                 
         
         
         sim_step_timer -= dt / 1000
         if sim_step_timer <= 0 or search_mode:
             if not paused:
-                # pygame.image.save(screen, str(uuid.uuid4()) + '.jpg')
-                old_cells = automaton.cells
-                population.append(automaton.step())
-                if search_mode and old_cells == automaton.cells:
+                # if automatons[len(automatons) - 1].turn % 5 == 0:    
+                # old_cells = automatons[len(automatons) - 1].cells
+                step(automatons=automatons, screen=screen, population=population)
+                if search_mode and population[len(population) - 1] == 0:
                     restarting = True
                     
             sim_step_timer = sim_step_time
         
         screen.fill((30, 30, 30))
-        automaton.draw(screen)
-        # automaton.cells[10][10].draw(screen)
-        # for i, j in automaton.cells[10][10].neighbors:
-        #     automaton.cells[i][j].draw(screen)
+        automatons[len(automatons) - 1].draw(screen)
+        # automatons[len(automatons) - 1].cells[10][10].draw(screen)
+        # for i, j in automatons[len(automatons) - 1].cells[10][10].neighbors:
+        #     automatons[len(automatons) - 1].cells[i][j].draw(screen)
 
         if show_text:
             if paused:
@@ -236,11 +260,13 @@ def main_loop(automaton: Automaton, screen: pygame.surface.Surface, sim_step_tim
             else:
                 text[0] = font.render("Simulating", True, 'Black')
 
-            text[1] = font.render(f't = {automaton.turn}', True, 'Black')
+            text[1] = font.render(f't = {automatons[len(automatons) - 1].turn}', True, 'Black')
             
             pygame.gfxdraw.box(screen, 
-                                pygame.Rect(text_pos[0], text_pos[1], max(text, key=lambda line: line.get_width()).get_width(), text[0].get_height() * len(text)), 
-                                (70, 70, 70, 200))
+                                pygame.Rect(text_pos[0],
+                                            text_pos[1],
+                                            max(text, key=lambda line: line.get_width()).get_width(), text[0].get_height() * len(text)), 
+                                            (70, 70, 70, 200))
             for i in range(len(text)):
                 screen.blit(text[i], (text_pos[0], text_pos[1] + i * text[0].get_height()))
         
@@ -274,8 +300,8 @@ show_text = True
 search_mode = False
 SEARCH_TIME = 150
 SIM_STEP_TIME = 0.2
-CELL_COUNT_X = 100
-CELL_COUNT_Y = 100
+CELL_COUNT_X = 30 
+CELL_COUNT_Y = 30
 PADDING = 3
 
 def lifelike_ETA_notation(num: int, neighborhood_size: int):
@@ -291,7 +317,7 @@ def main():
     global restarting
     
     pygame.init()
-    screen = pygame.display.set_mode((900, 900))
+    screen = pygame.display.set_mode((680, 680))
     
     
     while True:
@@ -311,14 +337,14 @@ def main():
         #     rule.survival.remove(3)
         
         # init_state = gen_random_state(  filling_center=(int(CELL_COUNT_X / 2), int(CELL_COUNT_Y / 2)), 
-        #                                 filling_range_halved=(2, 2),
+        #                                 filling_range_halved=(3, 3),
         #                                 whole_range=(CELL_COUNT_X, CELL_COUNT_Y)
         #                                 )
         # init_state = int_to_bool_list(0, CELL_COUNT_X * CELL_COUNT_Y)
         # init_state[int(len(init_state) / 2)] = True
         ##################################################################################################
         
-        CELL_WIDTH = 2 * (screen.get_width()) / CELL_COUNT_X - PADDING * 2
+        CELL_WIDTH = 2 * (screen.get_width()) / (CELL_COUNT_X) - PADDING * 2
         CELL_HEIGHT = (screen.get_height()) / CELL_COUNT_Y - PADDING
                 
         automaton = Automaton( 
@@ -335,22 +361,18 @@ def main():
                                 cell_padding_top=PADDING          
                             )  
         
-        for i in range(int(CELL_COUNT_X / 2), CELL_COUNT_X):
-            for j in range(CELL_COUNT_Y):
-                automaton.cells[i][j].is_alive = True
+        # apply_init_state(automaton=automaton, init_state=init_state)
         
-        for i in range(3):
-            automaton.step()
-            
-        for i in range(CELL_COUNT_Y):
-            automaton.cells[int(CELL_COUNT_X / 2)][i].is_alive = True
-        
-        # apply_init_state(automaton, init_state)
-        # print( "cell_count_x:", automaton.cell_count_x, 
-        #         "cell_count_y:", automaton.cell_count_y,
-        #         "rule:", automaton.rule)
-        # print(  "init_state:", bool_list_to_int(init_state))
-    
+        # automaton.step()
+        # for i in range(int(CELL_COUNT_X / 2) - 6, int(CELL_COUNT_X / 2) + 7):
+        #     for j in range(int(CELL_COUNT_Y / 2) - 3, int(CELL_COUNT_Y / 2) + 4):
+        #         if True not in automaton.gen_neighbors(automaton.cells[i][j]):
+        #             automaton.cells[i][j].is_alive = bool(random.randint(0, 1))
+
+        # for i in range(CELL_COUNT_X):
+        #     for j in range(CELL_COUNT_Y):
+        #         if automaton.cells[i][j].dir == CellDirection.DOWNWARDS:
+        #             automaton.cells[i][j].is_alive = not automaton.cells[i][j].is_alive
 
         population = main_loop(automaton, screen, SIM_STEP_TIME)
         
