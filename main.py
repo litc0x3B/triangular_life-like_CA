@@ -11,6 +11,8 @@ import json
 import uuid
 import matplotlib.pyplot as plt
 
+# Гущин Д.Н.
+
 class CellDirection(Enum):
     UPWARDS = -1
     DOWNWARDS = 1
